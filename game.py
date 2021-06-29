@@ -70,25 +70,35 @@ class BenefitDistributionGame:
 			"""
 			n = len(list(vfdb.keys())[0]) #n_players
 			#Compute all configurations excluding this players
-			configs_without = [key for key in vfdb if key[self.player_number == 0]]
-			#Parallel configurations including this player
-			configs_with = []#copy object to avoid any fuckin bug
-			for conf in configs_without:
-				conf = list(conf) #Make it mutable
-				conf[self.player_number] = 1 #Modify
-				conf = tuple(conf) #Make it immutable again
-				configs_with.append(conf)
-			#Compute Shapley value
-			#assert (configs_with == configs_without)
+			configs_without = [key for key in vfdb if key[self.player_number] == 0]
 			shapley = 0
-			for cwith, cwout in zip(configs_with, configs_without):
-				if cwith == tuple([1]*n): #Avoid configuration with all players
-					pass
-				else:
-					s = sum(cwout) #Number of elements in subconfiguration
-					weight = factorial(s)*factorial(n - s - 1)*(1/factorial(n))
-					term = vfdb[cwith] - vfdb[cwout] #Access stored values
-					shapley += weight*term
+			for conf in configs_without:
+				conf_with = list(conf)
+				conf_with[self.player_number] = 1
+				conf_with = tuple(conf_with) #configuration adding this player
+				s = sum(conf)
+				term = vfdb[conf_with] - vfdb[conf] #Added value
+				weight = factorial(s)*factorial(n - s - 1)*(1/factorial(n)) #weight according to definition
+				shapley += weight*term
+				
+#  			#Parallel configurations including this player
+#  			configs_with = []#copy object to avoid any fuckin bug
+#  			for conf in configs_without:
+# 				conf = list(conf) #Make it mutable
+# 				conf[self.player_number] = 1 #Modify
+# 				conf = tuple(conf) #Make it immutable again
+# 				configs_with.append(conf)
+#  			#Compute Shapley value
+#  			#assert (configs_with == configs_without)
+#  			shapley = 0
+#  			for cwith, cwout in zip(configs_with, configs_without):
+# 				if cwith == tuple([1]*n): #Avoid configuration with all players
+#  					pass
+# 				else:
+#  					s = sum(cwout) #Number of elements in subconfiguration
+#  					weight = factorial(s)*factorial(n - s - 1)*(1/factorial(n))
+#  					term = vfdb[cwith] - vfdb[cwout] #Access stored values
+#  					shapley += weight*term
 
 			return shapley
 
@@ -237,11 +247,13 @@ class BenefitDistributionGame:
 		float, positive value of config.
 		"""
 		#If configuration is empty, value is zero
-		if all([pos == 0 for pos in config]):
+		if sum(config) == 0:
 			return 0 #No consumption -> No shared energy
 		profile_wd, profile_we, pv_size, bess_size, grid_purchase_max = self._subconfig_inputs(config)
 		if pv_size == 0:
 			return 0 #No shared energy, nor power sold
+		if sum(config) == 1:
+			return 0 #Value zero for single player
 		# Optimization Setup
 		# Size (kW, electric)
 		pv = {'size': pv_size,}
@@ -319,29 +331,6 @@ class BenefitDistributionGame:
 
 		return player_list
 
-
-		#weekday profiles
-		"""
-		wdlist = glob.glob( (players_path / "wd" / "*.csv"))
-		#weekend profiles
-		welist = glob.glob( (players_path / "we" / "*.csv"))
-		#Create players
-		player_list = []
-		for ix, wd, we in enumerate(zip(wdlist, welist)):
-			wd_data = pd.read_csv(wd,
-								  sep = ';',
-								  decimal= ',',
-								  ).dropna().values[:,1:]
-			we_data = pd.read_csv(we,
-								  sep = ';',
-								  decimal= ',',
-								  ).dropna().values[:,1:]
-			#Instantiate new player
-			newplayer = _Player(ix, wd_data, we_data)
-			player_list.append(newplayer)
-		"""
-		return player_list
-
 	def _subconfig_inputs(self, config):
 		"""Generate all subconfiguration inputs.
 		Parameters:
@@ -369,8 +358,8 @@ class BenefitDistributionGame:
 
 	def _economic_value(self, shared_energy, grid_feed, PR3 = 42,  CUAF = 8.56 , TP = 110):
 		"""Return economic value of shared energy plus energy sales"""
-		ritiro_energia = grid_feed * PR3
-		incentivo = shared_energy * (CUAF + TP)
+		ritiro_energia = grid_feed/1000 * PR3
+		incentivo = shared_energy/1000 * (CUAF + TP)
 		return ritiro_energia + incentivo
 		
 #Game Class - Public Methods
@@ -380,9 +369,11 @@ class BenefitDistributionGame:
 repetto		Return:
 		shapley_vals: list with shapley value for each player"""
 		#Create value function database
-		self._vfdb = self._create_db() #{"[00010000]":vf}
+		self._vfdb = self._create_db() #{"(00010000)":vf}
 		#Compute Shapley values
 		shapley_vals = [player.shapley_value(self._vfdb) for player in self.players]
+		#grand_coalition = tuple([1]* self._n_players)
+		#grand_coalition_value = self._vfdb[grand_coalition]
 		return shapley_vals
 
 
@@ -390,7 +381,8 @@ repetto		Return:
 if __name__ == '__main__':
 	# Run game
 	game = BenefitDistributionGame()
-	distribution = game.play()
+	distribution  = game.play()
+	shapley_values = distribution[:]
 	distribution = distribution/sum(distribution) #normalize
 #%%
 	# Plot results
@@ -402,5 +394,5 @@ if __name__ == '__main__':
 			radius = 1,
 			pctdistance=1.4
 		    )
-	plt.title("Benefit Shares Distribution - w/o RSA")
+	plt.title("Benefit Shares Distribution - w/ RSA")
 	plt.show()
