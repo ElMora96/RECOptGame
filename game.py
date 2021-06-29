@@ -10,6 +10,7 @@ from itertools import product
 from math import factorial
 from evaluation_quicky import configuration_evaluation #To compute value function
 from systems_specifications import storage_system_specifications #Read battery specs
+from plotter import shares_pie_plot
 import os
 from pathlib import Path
 import seaborn as sns
@@ -22,6 +23,7 @@ sns.set_context("notebook", font_scale= 2.5)
 plt.rc('figure',figsize=(32,24))
 plt.rc('font', size=20)
 plt.ioff()
+
 class BenefitDistributionGame:
 	"""Class to represent benefit distribution as a game"""
 
@@ -80,25 +82,6 @@ class BenefitDistributionGame:
 				term = vfdb[conf_with] - vfdb[conf] #Added value
 				weight = factorial(s)*factorial(n - s - 1)*(1/factorial(n)) #weight according to definition
 				shapley += weight*term
-				
-#  			#Parallel configurations including this player
-#  			configs_with = []#copy object to avoid any fuckin bug
-#  			for conf in configs_without:
-# 				conf = list(conf) #Make it mutable
-# 				conf[self.player_number] = 1 #Modify
-# 				conf = tuple(conf) #Make it immutable again
-# 				configs_with.append(conf)
-#  			#Compute Shapley value
-#  			#assert (configs_with == configs_without)
-#  			shapley = 0
-#  			for cwith, cwout in zip(configs_with, configs_without):
-# 				if cwith == tuple([1]*n): #Avoid configuration with all players
-#  					pass
-# 				else:
-#  					s = sum(cwout) #Number of elements in subconfiguration
-#  					weight = factorial(s)*factorial(n - s - 1)*(1/factorial(n))
-#  					term = vfdb[cwith] - vfdb[cwout] #Access stored values
-#  					shapley += weight*term
 
 			return shapley
 
@@ -365,15 +348,34 @@ class BenefitDistributionGame:
 #Game Class - Public Methods
 	
 	def play(self):
-		"""Run Game.
-repetto		Return:
+		"""Run Game and Plot results.
+		Return:
 		shapley_vals: list with shapley value for each player"""
 		#Create value function database
 		self._vfdb = self._create_db() #{"(00010000)":vf}
 		#Compute Shapley values
 		shapley_vals = [player.shapley_value(self._vfdb) for player in self.players]
-		#grand_coalition = tuple([1]* self._n_players)
-		#grand_coalition_value = self._vfdb[grand_coalition]
+		distribution = shapley_vals / sum(shapley_vals)
+		# Plot results
+		# Use Lorenti's module
+		#Create input dataframe
+		names = [player.player_name for player in game.players] #player names
+		types = [] #producers/consumers/prosumers
+		for player in self.players:
+			if player._pv_size > 0:
+				if player._grid_purchase_max == 0:
+					types.append("producer")
+				else:
+					types.append("prosumer")
+			else:
+				types.append("consumer")
+		plot_input = pd.DataFrame({'player':names,
+								  'share': distribution,
+								  'type': types
+							 })
+		figure = shares_pie_plot(plot_input) #Plot data 
+		figure.show()
+		#Return benefit shares
 		return shapley_vals
 
 
@@ -381,18 +383,4 @@ repetto		Return:
 if __name__ == '__main__':
 	# Run game
 	game = BenefitDistributionGame()
-	distribution  = game.play()
-	shapley_values = distribution[:]
-	distribution = distribution/sum(distribution) #normalize
-#%%
-	# Plot results
-	names = [player.player_name for player in game.players]
-	plt.pie(distribution,
-		    labels=names,
-			explode = [0.01] * len(distribution),
-			autopct='%1.1f%%',
-			radius = 1,
-			pctdistance=1.4
-		    )
-	plt.title("Benefit Shares Distribution - w/ RSA")
-	plt.show()
+	shapley_vals  = game.play()
