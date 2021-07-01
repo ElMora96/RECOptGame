@@ -63,10 +63,11 @@ class BenefitDistributionGame:
  
 
 
-		def shapley_value(self, vfdb):
+		def shapley_value(self, vfdb, approx_order = None):
 			"""Compute shapley value of this user.
 			Parameters:
 			vfdb: value function database (dict)
+			approx_order: approximation order
 			Returns:
 			shapley: float. Shapley value for this player
 			"""
@@ -74,16 +75,32 @@ class BenefitDistributionGame:
 			#Compute all configurations excluding this players
 			configs_without = [key for key in vfdb if key[self.player_number] == 0]
 			shapley = 0
+			if approx_order is None:
+				order = 0
+			else:
+				order = n - approx_order
+			
 			for conf in configs_without:
-				conf_with = list(conf)
-				conf_with[self.player_number] = 1
-				conf_with = tuple(conf_with) #configuration adding this player
-				s = sum(conf)
-				term = vfdb[conf_with] - vfdb[conf] #Added value
-				weight = factorial(s)*factorial(n - s - 1)*(1/factorial(n)) #weight according to definition
-				shapley += weight*term
+				if sum(conf) < order:
+					pass
+				else:
+					conf_with = list(conf)
+					conf_with[self.player_number] = 1
+					conf_with = tuple(conf_with) #configuration adding this player
+					s = sum(conf)
+					term = vfdb[conf_with] - vfdb[conf] #Added value
+					weight = factorial(s)*factorial(n - s - 1)*(1/factorial(n)) #weight according to definition
+					shapley += weight*term
 
 			return shapley
+		
+		def shapley_truncated_value(self, vfdb):
+			n = len(list(vfdb.keys())[0]) #n_players
+			grand_coalition = tuple([1]*n)
+			other = list(grand_coalition)
+			other[self.player_number] = 0
+			other = tuple(other)
+			
 
 		def _simulate_profiles(self):
 			"""Run simulator to generate profiles"""
@@ -233,10 +250,10 @@ class BenefitDistributionGame:
 		if sum(config) == 0:
 			return 0 #No consumption -> No shared energy
 		profile_wd, profile_we, pv_size, bess_size, grid_purchase_max = self._subconfig_inputs(config)
+		
 		if pv_size == 0:
 			return 0 #No shared energy, nor power sold
-		if sum(config) == 1:
-			return 0 #Value zero for single player
+
 		# Optimization Setup
 		# Size (kW, electric)
 		pv = {'size': pv_size,}
@@ -347,19 +364,22 @@ class BenefitDistributionGame:
 		
 #Game Class - Public Methods
 	
-	def play(self):
+	def play(self, approx_order = None):
 		"""Run Game and Plot results.
+		Parameters:
+			approx_order: int or None -- Order of approximation in shapley 
+			value calculation. Default: None - No approximation
 		Return:
 		shapley_vals: list with shapley value for each player"""
 		#Create value function database
 		self._vfdb = self._create_db() #{"(00010000)":vf}
 		#Compute Shapley values
-		shapley_vals = [player.shapley_value(self._vfdb) for player in self.players]
+		shapley_vals = [player.shapley_value(self._vfdb, approx_order) for player in self.players]
 		distribution = shapley_vals / sum(shapley_vals)
 		# Plot results
 		# Use Lorenti's module
 		#Create input dataframe
-		names = [player.player_name for player in game.players] #player names
+		names = [player.player_name for player in self.players] #player names
 		types = [] #producers/consumers/prosumers
 		for player in self.players:
 			if player._pv_size > 0:
@@ -369,12 +389,12 @@ class BenefitDistributionGame:
 					types.append("prosumer")
 			else:
 				types.append("consumer")
-		plot_input = pd.DataFrame({'player':names,
+		plot_input = pd.DataFrame({'player': names,
 								  'share': distribution,
 								  'type': types
-							 })
+							 	})
 		figure = shares_pie_plot(plot_input) #Plot data 
-		figure.show()
+		plt.show(figure)
 		#Return benefit shares
 		return shapley_vals
 
