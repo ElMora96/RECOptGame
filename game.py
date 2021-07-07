@@ -8,13 +8,14 @@ import pandas as pd
 import numpy as np
 from itertools import product
 from math import factorial
-from evaluation_quicky import configuration_evaluation #To compute value function
+from evaluation_quicky import configuration_evaluation, yearly_monthly_energy #To compute value function & yearly consumption
 from systems_specifications import storage_system_specifications #Read battery specs
 from plotter import shares_pie_plot
 import os
 from pathlib import Path
 import seaborn as sns
 import matplotlib.pyplot as plt
+from numpy_financial import irr
 
 #Plot configuration
 sns.set_theme() #use to reset955
@@ -68,8 +69,6 @@ class BenefitDistributionGame:
 				self._battery_size = float(self._battery_size)
 			#Compute capex for battery and/or PV
 			self._capex = self._compute_capex()
-			#Compute approx yearly energy expense
-			self._energy_expense = self._compute_energy_expense()
 			#Compute player max power
 			self._grid_purchase_max = np.ceil(profile_wd.max())
 
@@ -81,6 +80,9 @@ class BenefitDistributionGame:
 					self.player_type = "prosumer"
 			else:
 				self.player_type = "consumer"
+
+			# Store shapley value
+			self.shapley = None
 
 		def _simulate_profiles(self):
 			"""Run simulator to generate profiles"""
@@ -98,10 +100,6 @@ class BenefitDistributionGame:
 			#Total amount
 			capex = capex_pv + capex_battery
 			return capex
-
-		def _compute_energy_expense(self)
-			"""Compute approximate yearly expense for energy"""
-			raise NotImplementedError("Do the trick with lorenti")
 
 		def shapley_value(self, vfdb, approx_order = None):
 			"""Compute shapley value of this user.
@@ -132,6 +130,8 @@ class BenefitDistributionGame:
 					term = vfdb[conf_with] - vfdb[conf] #Added value
 					weight = factorial(s)*factorial(n - s - 1)*(1/factorial(n)) #weight according to definition
 					shapley += weight*term
+			#Save shapley value for later usage
+			self.shapley = shapley
 
 			return shapley
 
@@ -270,16 +270,18 @@ class BenefitDistributionGame:
 		db = {key : self._value_function(key) for key in configs}
 		return db
 
-	def _value_function(self, config):
+	def _value_function(self, config, mode = 'democratic'):
 		"""Compute value of given config. Wrapper for
 		Lorenti's module.
 		Parameters:
 		config: binary iterable of length self._n_players
+		mode: string in {'democratic', 'republican'}
 		Returns:
 		float, positive value of config.
 		"""
 		#If configuration is empty, value is zero
-		if sum(config) <= 1:
+		threshold = 0 if mode == 'republican' else 1
+		if sum(config) <= threshold:
 			return 0 #No consumption -> No shared energy
 		profile_wd, profile_we, pv_size, bess_size, grid_purchase_max = self._subconfig_inputs(config)
 		
@@ -329,7 +331,7 @@ class BenefitDistributionGame:
 		grid_feed = yearly_energy['injections']
 
 		#Compute value
-		value = self._economic_value(shared_energy, grid_feed)
+		value = self._economic_value(grid_feed, shared_energy)
 
 		return value
 		
@@ -387,12 +389,59 @@ class BenefitDistributionGame:
 			grid_purchase_max += player._grid_purchase_max
 
 		return profile_wd, profile_we, pv_size, battery_size, grid_purchase_max
-
-	def _economic_value(self, shared_energy, grid_feed, PR3 = 42,  CUAF = 8.56 , TP = 110):
+#----------------------------------------Economic Functions---------------------------------------
+	def _economic_value(self, grid_feed, shared_energy, PR3 = 42,  CUAF = 8.56 , TP = 110):
 		"""Return economic value of shared energy plus energy sales"""
 		ritiro_energia = grid_feed/1000 * PR3
 		incentivo = shared_energy/1000 * (CUAF + TP)
 		return ritiro_energia + incentivo
+
+	def _cash_flows(self, player, OM = 30, n_years = 20):
+		"""Compute simplified cash flows for given player"""
+		yearly_revenue = player.shapley
+		yearly_expense = player._pv_size * OM
+
+		cash_flows = [yearly_revenue - yearly_expense] * n_years
+		cash_flows = np.array(cash_flows)
+		
+		return cash_flows
+	
+	def _pbt(self, player):
+		"""Pay-Back Time"""
+		initial_investment = player._capex
+		cash_flows = self._cash_flows(player)
+		year = 0 
+		amount = 0 #Total money
+		while amount < initial_investment:
+			amount += cash_flows[year]
+			year += 1
+			if year == len(cash_flows):
+				return 'Infeasible' 
+		return year
+		
+	def _pcr(self, player, n_years = 20, OM = 30, energy_price = 230):
+		"""Percentage Cost Reduction"""
+		#OM + Amortations
+		yearly_expense = player._pv_size * OM + player._capex / n_years
+		yearly_revenue = player.shapley
+
+		#yearly energy consumption & expense
+		profiles_months = np.stack([player._profile_wd, player._profile_we], axis = 2)
+		yearly_consumption, _ = yearly_monthly_energy(self._time_dict,
+													  profiles_months,	
+													  self._auxiliary_dict)
+		yearly_energy_expense = yearly_consumption * energy_price
+		#Compute kpi
+		pcr = 100 * (yearly_revenue - yearly_expense - yearly_energy_expense)/yearly_energy_expense
+		return pcr
+
+	def _irr(self, player):
+		"""Internal Return Rate"""
+		initial_investment = player._capex
+		cash_flows = list(self._cash_flows(player))
+		cash_flows = [- initial_investment] + cash_flows
+		return irr(cash_flows)
+
 		
 #Game Class - Public Methods
 	
@@ -407,28 +456,54 @@ class BenefitDistributionGame:
 		self._vfdb = self._create_db() #{"(00010000)":vf}
 		#Compute Shapley values
 		shapley_vals = [player.shapley_value(self._vfdb, approx_order) for player in self.players]
-		distribution = shapley_vals / sum(shapley_vals)
-		# Plot results
-		# Use Lorenti's module
-		#Create input dataframe
-		names = [player.player_name for player in self.players] #player names
-		types = [player.player_type for player in self.players] #producers/consumers/prosumers
-
-		plot_input = pd.DataFrame({'player': names,
-								  'share': distribution,
-								  'type': types
-							 	})
-		figure = shares_pie_plot(plot_input) #Plot data 
-		plt.show(figure)
-		
 		#Save shapley values
 		self.shapley_vals = shapley_vals
-
-		#Return benefit shares
+		
 		if return_vals:
+			# Plot results
+			# Use Lorenti's module
+			#Create input dataframe
+			names = [player.player_name for player in self.players] #player names
+			types = [player.player_type for player in self.players] #producers/consumers/prosumers
+			distribution = shapley_vals / sum(shapley_vals)
+			plot_input = pd.DataFrame({'player': names,
+									  'share': distribution,
+									  'type': types
+								 	})
+			figure = shares_pie_plot(plot_input) #Plot data 
+			plt.show(figure)
+
+			#Return benefit shares
 			return shapley_vals
 
+	def compute_kpis(self):
+		"""Compute and return main KPIs for each player.
+		Return pd.DataFrame with KPIs"""
+		if self.shapley_vals is None: #Generate shapley values
+			self.play(return_vals = False)
 
+		# Compute KPIs for each player
+		#columns = ["PBT", "PCR", "IRR"]
+		kpi_array = np.empty(shape = (self._n_players, 3)) #store values
+		kpi_array.fill(np.nan)
+		for ix, player in enumerate(self.players):
+			if player.player_type == "producer":
+				kpi_array[ix, 0] = self._pbt(player)
+				kpi_array[ix, 2] = self._irr(player)
+
+			elif player.player_type == "consumer":
+				kpi_array[ix, 1] = self._pcr(player)
+
+			elif player.player_type == "prosumer":
+				kpi_array[ix, 0] = self._pbt(player)
+				kpi_array[ix, 1] = self._pcr(player)
+				kpi_array[ix, 2] = self._irr(player)
+
+		#Return result as a dataframe
+		kpi_df = pd.DataFrame(data = kpi_array,
+			   				 columns = ["PBT", "PCR", "IRR"]
+			   				 )
+		return kpi_df
 
 
 ##### 	UNIT TEST #######
@@ -436,5 +511,6 @@ if __name__ == '__main__':
 	# Run game
 	game = BenefitDistributionGame()
 	shapley_vals  = game.play()
+	kpis = game.compute_kpis()
 
 

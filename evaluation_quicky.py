@@ -18,11 +18,78 @@ an aggregate of users. The performances are evaluated for a configuration with
 given sizes of the components (photovoltaic system and battery).
 '''
 
+def yearly_monthly_energy(
+		time_dict, profile_months, auxiliary_dict):
+	'''
+	The method computes an yearly energy value based on an array of daily
+	power profiles (time-series) grouped by months and day-types.
+	
+	Parameters
+	----------
+	time_dict : dict
+		Contains all the data needed for the time-discretisation of one day
+	profile_months : np.array
+		Contains the daily profiles grouped by typical days
+	auxiliary_dict : dict
+		Contains all the elements about the reference year.
+
+	Returns
+	-------
+	yearly_energy : float
+		Value of the yearly energy associated to the input power profiles.
+	monthly_energy : np.array
+		Value of the monthly energy associated to the input power profiles.
+	'''
+	
+	### Inputs
+	
+	## Time discretization
+	# Time-step (h)
+	dt = time_dict['dt']
+	
+	## Auxiliary variable (seasons/month/days/days_distr dictionaries)
+	
+	# Days distribution as array
+	days_distr_months_array = auxiliary_dict['days_distr_months_array']
+	
+	### Evaluation
+	
+	# Yearly value of energy calculated by multiplying the daily values of 
+	# energy (sum of powers over the day) by the number of days in one year
+	#for each typical day
+	monthly_energy = \
+		(np.sum(profile_months, axis=0)*dt) * days_distr_months_array
+	monthly_energy = np.sum(monthly_energy, axis=1)
+	yearly_energy = np.sum(monthly_energy)
+	
+	return yearly_energy, monthly_energy
+	
+
+##############################################################################
+
 def configuration_evaluation(
 		time_dict, profiles_months, technologies_dict, auxiliary_dict):
 	'''
 	The method evaluate the monthly/yearly performances of a configuration
 	with fixed components' sizes, where energy is virtually shared.
+	
+	Parameters
+	----------
+	time_dict : dict
+		Contains all the data needed for the time-discretisation of one day
+	profiles_months : dict of np.arrays
+		Contains the arrays of the daily profiles (consumption and production)
+		grouped by typical days.
+	technologies_dict : dict
+		Contains all the data about the components in the configuration (PV 
+		and BESS)
+	auxiliary_dict : dict
+		Contains all the elements about the reference year.
+
+	Returns
+	-------
+	yearly_energy : dict
+		Contains the yearly value of injections, withdrawals and shared energy.
 	'''
 
 	#### Inputs
@@ -66,12 +133,11 @@ def configuration_evaluation(
 	ue_demand_months = profiles_months['ue_demand_months']
 	
 	## Monthly values of energy 
-	pv_energy_months = \
-		(np.sum(pv_production_months, axis=0) * dt) * days_distr_months_array
-	pv_energy_months = np.sum(pv_energy_months, axis=1)
-	ue_energy_months = \
-		(np.sum(ue_demand_months, axis=0) * dt) * days_distr_months_array
-	ue_energy_months = np.sum(ue_energy_months, axis=1)
+	pv_energy_year, pv_energy_months = \
+		yearly_monthly_energy(time_dict, pv_production_months, auxiliary_dict)
+		
+	ue_energy_year, ue_energy_months = \
+		yearly_monthly_energy(time_dict, ue_demand_months, auxiliary_dict)
 
 	monthly_energy = pd.DataFrame({
 		'month': list(months.keys()),
@@ -81,35 +147,35 @@ def configuration_evaluation(
 	 
 	### Evaluation
 	
-	shared_energy_months = np.zeros((n_months,))
-	
-	# (comment this if you don't care about bess's efficiencies)
-	injections_months = np.zeros((n_months,))
-	withdrawals_months = np.zeros((n_months,))
-	
 	## No optimisation of the power flows
+	
 	# If there is no battery, no optimisation is needed, therefore the 
-	# evaluation of the shared energy can be done using numpy
+	# evaluation of the shared energy can be done using numpy...
 	if not bess_flag:
 		shared_power_months = \
 			np.minimum(pv_production_months, ue_demand_months)
 		
-		shared_energy_months = (np.sum(shared_power_months, axis=0) * dt) * \
-			days_distr_months_array
-		shared_energy_months = np.sum(shared_energy_months, axis=1)
+		shared_energy_year, shared_energy_months = \
+			yearly_monthly_energy(time_dict, shared_power_months, auxiliary_dict)
 		
 		monthly_energy['shared_power'] = shared_energy_months
-
-		# (comment this if you don't care about bess's efficiencies)
-		injections_months = pv_energy_months
+		
+		# Injections and withdrawals
+		injections_months = pv_energy_months.copy()
 		monthly_energy['injections'] = injections_months
-		withdrawals_months = ue_energy_months
+		injections_year = np.sum(injections_months)
+		withdrawals_months = ue_energy_months.copy()
 		monthly_energy['withdrawals'] = withdrawals_months
-
-
-	### Optimisation of the power flows
-	# Otherwise, the optimisation is performed         
+		withdrawals_year = np.sum(withdrawals_months)
+		
+	## Optimisation of the power flows
+	
+	# ...Otherwise, the optimisation is performed
 	else:
+		
+		shared_energy_months = np.zeros((n_months,))
+		injections_months = np.zeros((n_months,))
+		withdrawals_months = np.zeros((n_months,))
 		
 		# If the optimisation fails in any typical day, a flag is activated
 		# in correspondance of that day in order to fix the values using
@@ -223,22 +289,26 @@ def configuration_evaluation(
 							  withdrawals_months[~nans], period = n_months)
 				
 				failed_opt_flags[nans, :] = [0, 0]
-					
+		
+		# Shared 
 		monthly_energy['shared_power'] = shared_energy_months 
+		shared_energy_year = np.sum(shared_energy_months)
 			 
-		# (comment this if you don't care about bess's efficiencies)
+		# Injections and withdrawals
 		monthly_energy['injections'] = injections_months
+		injections_year = np.sum(injections_months)
 		monthly_energy['withdrawals'] = withdrawals_months
+		withdrawals_year = np.sum(withdrawals_months)
 
-	# Uncomment to write results	
+	# Uncomment to write results
 	#monthly_energy.to_excel('monthly_energy.xlsx')
 	
 	yearly_energy = {
-		'pv_production': np.sum(pv_energy_months),
-		'ue_demand': np.sum(ue_energy_months),
-		'shared power': np.sum(shared_energy_months),
-		'injections': np.sum(injections_months),
-		'withdrawals': np.sum(withdrawals_months),
+		'pv_production': pv_energy_year,
+		'ue_demand': ue_energy_year,
+		'shared power': shared_energy_year,
+		'injections': injections_year,
+		'withdrawals': withdrawals_year,
 		}
 	
 	return yearly_energy
