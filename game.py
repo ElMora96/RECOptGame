@@ -73,6 +73,15 @@ class BenefitDistributionGame:
 			#Compute player max power
 			self._grid_purchase_max = np.ceil(profile_wd.max())
 
+			#Set player type - Useful for later usage
+			if self._pv_size > 0:
+				if self._grid_purchase_max == 0:
+					self.player_type = "producer"
+				else:
+					self.player_type = "prosumer"
+			else:
+				self.player_type = "consumer"
+
 		def _simulate_profiles(self):
 			"""Run simulator to generate profiles"""
 			raise NotImplementedError("Integrate Lorenti's simulation engine") 
@@ -387,7 +396,7 @@ class BenefitDistributionGame:
 		
 #Game Class - Public Methods
 	
-	def play(self, approx_order = None):
+	def play(self, approx_order = None, return_vals = True):
 		"""Run Game and Plot results.
 		Parameters:
 			approx_order: int or None -- Order of approximation in shapley 
@@ -403,15 +412,8 @@ class BenefitDistributionGame:
 		# Use Lorenti's module
 		#Create input dataframe
 		names = [player.player_name for player in self.players] #player names
-		types = [] #producers/consumers/prosumers
-		for player in self.players:
-			if player._pv_size > 0:
-				if player._grid_purchase_max == 0:
-					types.append("producer")
-				else:
-					types.append("prosumer")
-			else:
-				types.append("consumer")
+		types = [player.player_type for player in self.players] #producers/consumers/prosumers
+
 		plot_input = pd.DataFrame({'player': names,
 								  'share': distribution,
 								  'type': types
@@ -423,7 +425,10 @@ class BenefitDistributionGame:
 		self.shapley_vals = shapley_vals
 
 		#Return benefit shares
-		return shapley_vals
+		if return_vals:
+			return shapley_vals
+
+
 
 
 ##### 	UNIT TEST #######
@@ -431,4 +436,5 @@ if __name__ == '__main__':
 	# Run game
 	game = BenefitDistributionGame()
 	shapley_vals  = game.play()
+
 
