@@ -24,7 +24,7 @@ def shares_pie_plot(data,
 					values_col = 'share',
 					first_group_col = 'player',
 					second_group_col = 'type',
-					values_threshold = 0.15,
+					values_threshold = 0.2,
 					second_pie_flag=True,
 					fig_specs={
 						'suptitle': "",},

@@ -30,16 +30,25 @@ class BenefitDistributionGame:
 #-----Nested Player class - Each player represents a participant in the REC----
 	class _Player:
 		"""Constructor should not be invoked by user"""
-		def __init__(self, player_number, player_name, profile_we = None, profile_wd = None):
+		def __init__(self, player_number, player_name, profile_we = None, profile_wd = None, 
+					 spec_capex_pv = (1100, 800), spec_capex_battery = 500):
 			"""Parameters:
 				player_number: int. 
+				player_name: str.
+				profile_we: np.array.
+				profile_wd: np.array.
+				spec_capex_pv: tuple of size 2 -- Specific cost for small / large plant.
+							   Threshold is set to 20 KW.
+				spec_capex_battery: float. -- Specific cost.
 			"""
 			#Store data - pd.DataFrames in usual format.
 			if profile_we is None or profile_wd is None:
 				profile_we, profile_wd = self._simulate_profiles()
 			self._profile_wd = profile_wd
 			self._profile_we = profile_we
-
+			#Parameters
+			self.spec_capex_pv = spec_capex_pv
+			self.spec_capex_battery = spec_capex_battery
 			#Assign player number
 			self.player_number = player_number
 			#Player name
@@ -51,17 +60,39 @@ class BenefitDistributionGame:
 			if self._pv_size == '': 
 				self._pv_size = 0
 			else:
-				self._pv_size = int(self._pv_size)
+				self._pv_size = float(self._pv_size)
 			self._battery_size = input("Insert battery size for this player: ")
 			if self._battery_size == '':
 				self._battery_size = 0
 			else:
-				self._battery_size = int(self._battery_size)
-
+				self._battery_size = float(self._battery_size)
+			#Compute capex for battery and/or PV
+			self._capex = self._compute_capex()
+			#Compute approx yearly energy expense
+			self._energy_expense = self._compute_energy_expense()
 			#Compute player max power
 			self._grid_purchase_max = np.ceil(profile_wd.max())
- 
 
+		def _simulate_profiles(self):
+			"""Run simulator to generate profiles"""
+			raise NotImplementedError("Integrate Lorenti's simulation engine") 
+
+		def _compute_capex(self):
+			"""Compute capex for battery and/or PV"""
+			#Solar
+			if self._pv_size < 20:
+				capex_pv = self.spec_capex_pv[0]*self._pv_size
+			else:
+				capex_pv = self.spec_capex_pv[1]*self._pv_size
+			#Battery
+			capex_battery = self.spec_capex_battery*self._battery_size
+			#Total amount
+			capex = capex_pv + capex_battery
+			return capex
+
+		def _compute_energy_expense(self)
+			"""Compute approximate yearly expense for energy"""
+			raise NotImplementedError("Do the trick with lorenti")
 
 		def shapley_value(self, vfdb, approx_order = None):
 			"""Compute shapley value of this user.
@@ -82,6 +113,7 @@ class BenefitDistributionGame:
 			
 			for conf in configs_without:
 				if sum(conf) < order:
+					print("Skipping") #debug
 					pass
 				else:
 					conf_with = list(conf)
@@ -93,18 +125,7 @@ class BenefitDistributionGame:
 					shapley += weight*term
 
 			return shapley
-		
-		def shapley_truncated_value(self, vfdb):
-			n = len(list(vfdb.keys())[0]) #n_players
-			grand_coalition = tuple([1]*n)
-			other = list(grand_coalition)
-			other[self.player_number] = 0
-			other = tuple(other)
-			
 
-		def _simulate_profiles(self):
-			"""Run simulator to generate profiles"""
-			raise NotImplementedError("Integrate Lorenti's simulation engine")
 
 #Game Class - Private Methods
 	def __init__(self):
@@ -225,7 +246,9 @@ class BenefitDistributionGame:
 					  'time': self._time,
 					  'time_sim': self._time_sim,
 					  }
-
+		
+		#Store Shapley values once computed
+		self.shapley_vals = None
 							
 	def _create_db(self):
 		"""Create database with value function result foreach configuration"""
@@ -247,7 +270,7 @@ class BenefitDistributionGame:
 		float, positive value of config.
 		"""
 		#If configuration is empty, value is zero
-		if sum(config) == 0:
+		if sum(config) <= 1:
 			return 0 #No consumption -> No shared energy
 		profile_wd, profile_we, pv_size, bess_size, grid_purchase_max = self._subconfig_inputs(config)
 		
@@ -395,6 +418,10 @@ class BenefitDistributionGame:
 							 	})
 		figure = shares_pie_plot(plot_input) #Plot data 
 		plt.show(figure)
+		
+		#Save shapley values
+		self.shapley_vals = shapley_vals
+
 		#Return benefit shares
 		return shapley_vals
 
@@ -404,3 +431,4 @@ if __name__ == '__main__':
 	# Run game
 	game = BenefitDistributionGame()
 	shapley_vals  = game.play()
+
