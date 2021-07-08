@@ -31,7 +31,7 @@ class BenefitDistributionGame:
 #-----Nested Player class - Each player represents a participant in the REC----
 	class _Player:
 		"""Constructor should not be invoked by user"""
-		def __init__(self, player_number, player_name, profile_we = None, profile_wd = None, 
+		def __init__(self, player_number, player_name, profile_wd = None, profile_we = None,
 					 spec_capex_pv = (1100, 800), spec_capex_battery = 500):
 			"""Parameters:
 				player_number: int. 
@@ -327,7 +327,7 @@ class BenefitDistributionGame:
 													)
 
 		#Extract quantities of interest
-		shared_energy = yearly_energy['shared power']*self._dt #Check better for different discretizations
+		shared_energy = yearly_energy['shared power']
 		grid_feed = yearly_energy['injections']
 
 		#Compute value
@@ -360,7 +360,8 @@ class BenefitDistributionGame:
 								  ).dropna().values[:,1:]
 
 			#Instantiate new player
-			newplayer = self._Player(ix, folder, wd_data, we_data)
+			newplayer = self._Player(player_number = ix, player_name = folder, 
+									 profile_wd = wd_data, profile_we = we_data)
 			player_list.append(newplayer)
 
 		return player_list
@@ -432,7 +433,7 @@ class BenefitDistributionGame:
 													  self._auxiliary_dict)
 		yearly_energy_expense = yearly_consumption * energy_price
 		#Compute kpi
-		pcr = 100 * (yearly_revenue - yearly_expense - yearly_energy_expense)/yearly_energy_expense
+		pcr = 100 * (yearly_revenue - yearly_expense)/yearly_energy_expense
 		return pcr
 
 	def _irr(self, player):
