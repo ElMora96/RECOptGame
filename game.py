@@ -430,8 +430,8 @@ class BenefitDistributionGame:
 		profiles_months = np.stack([player._profile_wd, player._profile_we], axis = 2)
 		yearly_consumption, _ = yearly_monthly_energy(self._time_dict,
 													  profiles_months,	
-													  self._auxiliary_dict)
-		yearly_energy_expense = yearly_consumption * energy_price
+													  self._auxiliary_dict) #KWh
+		yearly_energy_expense = yearly_consumption/1000 * energy_price #KWh to MWh
 		#Compute kpi
 		pcr = 100 * (yearly_revenue - yearly_expense)/yearly_energy_expense
 		return pcr
