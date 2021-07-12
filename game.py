@@ -18,7 +18,9 @@ import matplotlib.pyplot as plt
 from numpy_financial import irr
 
 #Plot configuration
-sns.set_theme() #use to reset955
+# =============================================================================
+# sns.set_theme() #use to reset955
+# =============================================================================
 sns.set_style("whitegrid")
 sns.set_context("notebook", font_scale= 2.5)
 plt.rc('figure',figsize=(32,24))
@@ -132,6 +134,10 @@ class BenefitDistributionGame:
 					shapley += weight*term
 			#Save shapley value for later usage
 			self.shapley = shapley
+			
+			############################################ ADDED PLAYER'S PAYOFF
+			self.payoff = shapley
+			##################################################################
 
 			return shapley
 
@@ -258,6 +264,7 @@ class BenefitDistributionGame:
 		
 		#Store Shapley values once computed
 		self.shapley_vals = None
+		self.payoffs = None
 							
 	def _create_db(self):
 		"""Create database with value function result foreach configuration"""
@@ -332,6 +339,9 @@ class BenefitDistributionGame:
 
 		#Compute value
 		value = self._economic_value(grid_feed, shared_energy)
+		
+		if sum(config) == self._n_players:
+			print('Total value: {} euro/year'.format(value))
 
 		return value
 		
@@ -391,15 +401,15 @@ class BenefitDistributionGame:
 
 		return profile_wd, profile_we, pv_size, battery_size, grid_purchase_max
 #----------------------------------------Economic Functions---------------------------------------
-	def _economic_value(self, grid_feed, shared_energy, PR3 = 42,  CUAF = 8.56 , TP = 110):
+	def _economic_value(self, grid_feed, shared_energy, PR3 = 42,  CUAF = 8.56 , TP = 110, feed_tax = 0.22):
 		"""Return economic value of shared energy plus energy sales"""
-		ritiro_energia = grid_feed/1000 * PR3
+		ritiro_energia = grid_feed/1000 * PR3 * (1-feed_tax)
 		incentivo = shared_energy/1000 * (CUAF + TP)
-		return ritiro_energia + incentivo
+		return (ritiro_energia + incentivo)*0.98
 
 	def _cash_flows(self, player, OM = 30, n_years = 20):
 		"""Compute simplified cash flows for given player"""
-		yearly_revenue = player.shapley
+		yearly_revenue = player.payoff
 		yearly_expense = player._pv_size * OM
 
 		cash_flows = [yearly_revenue - yearly_expense] * n_years
@@ -424,7 +434,7 @@ class BenefitDistributionGame:
 		"""Percentage Cost Reduction"""
 		#OM + Amortations
 		yearly_expense = player._pv_size * OM + player._capex / n_years
-		yearly_revenue = player.shapley
+		yearly_revenue = player.payoff
 
 		#yearly energy consumption & expense
 		profiles_months = np.stack([player._profile_wd, player._profile_we], axis = 2)
@@ -460,6 +470,11 @@ class BenefitDistributionGame:
 		#Save shapley values
 		self.shapley_vals = shapley_vals
 		
+		############################ ADDED EVALUATION OF PLAYER'S PAYOFFS LIST
+		payoffs = [player.payoff for player in self.players]
+		self.payoffs = payoffs
+		######################################################################
+		
 		if return_vals:
 			# Plot results
 			# Use Lorenti's module
@@ -480,7 +495,7 @@ class BenefitDistributionGame:
 	def compute_kpis(self):
 		"""Compute and return main KPIs for each player.
 		Return pd.DataFrame with KPIs"""
-		if self.shapley_vals is None: #Generate shapley values
+		if self.payoffs is None: #Generate shapley values
 			self.play(return_vals = False)
 
 		# Compute KPIs for each player
@@ -505,13 +520,68 @@ class BenefitDistributionGame:
 			   				 columns = ["PBT", "PCR", "IRR"]
 			   				 )
 		return kpi_df
-
+	
+	def find_ms_share(self, min_pcr_min=8, avg_irr_min=0.06, avg_pbt_max=15, delta_ms=0.001):
+		"""
+		Finds the maximum value for the REC's management service's share
+		that allows to keep good KPIs for the members
+		"""
+		# Flag to continue exploring the reduction in players'payoffs
+		keep_going = True
+		# Quantity to remove from each payoff at each iteration
+		payoffs_delta = [delta_ms*player.payoff for player in self.players]
+		while keep_going:
+			try:
+				# Try to remove the delta from each pay-off and run the 
+				# evaluation of the kpis
+				payoffs = []
+				for player, payoff_delta in zip(self.players, payoffs_delta):
+					player.payoff = player.payoff - payoff_delta
+					payoffs.append(player.payoff)
+				self.payoffs = payoffs
+				kpi_df = self.compute_kpis()
+				# An average value of each indicator can be evaluated and 
+				# compared with the related bound value
+				# Pay-back time
+				pbts = np.array(kpi_df['PBT'])
+				avg_pbt = np.nanmean(pbts)
+				# Percentage cost reduction
+				pcrs = np.array(kpi_df['PCR'])
+				min_pcr = np.nanmin(pcrs)
+				# Internal rate of return
+				irrs = np.array(kpi_df['IRR'])
+				avg_irr = np.nanmean(irrs)
+				
+				keep_going = (avg_pbt <= avg_pbt_max) and \
+					(min_pcr >= min_pcr_min) and \
+					(avg_irr >= avg_irr_min)
+			except:
+				# If an error is raised during the evaluation of the kpis,
+				# the flag to continue the exploration is deactivated
+				keep_going = False
+			
+			if keep_going == False:
+				# If the flag is deactivated (due to an error or due to a
+				# kpi that reaches the bound) the payoffs are restored to 
+				# the previous values
+				payoffs = []
+				for player, payoff_delta in zip(self.players, payoffs_delta):
+					player.payoff = player.payoff + payoff_delta
+					payoffs.append(player.payoff)
+				self.payoffs = payoffs
+		
+		# Evaluate management service's payoff and share
+		ms_value = sum(self.shapley_vals) - sum(self.payoffs)
+		ms_share = ms_value / sum(self.shapley_vals)
+		return ms_share
+		
 
 ##### 	UNIT TEST #######
 if __name__ == '__main__':
 	# Run game
 	game = BenefitDistributionGame()
 	shapley_vals  = game.play()
+	ms_share = game.find_ms_share()
 	kpis = game.compute_kpis()
 
 
